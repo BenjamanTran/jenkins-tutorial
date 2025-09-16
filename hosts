@@ -1,0 +1,24 @@
+# Ansible inventory file
+# Defines hosts for local and remote deployment
+
+[local]
+# Local development server
+127.0.0.1 ansible_connection=local
+
+[remote]
+# Remote production server (direct connection)
+118.69.34.46:3334 ansible_user=newbie ansible_ssh_private_key_file=~/.ssh/newbie_id_rsa ansible_port=3334
+
+[remote-jump]
+# Remote production server via jump host
+10.1.1.195 ansible_user=newbie ansible_ssh_private_key_file=~/.ssh/newbie_id_rsa
+
+[all:vars]
+# Global variables for all hosts
+ansible_python_interpreter=/usr/bin/python3
+ansible_ssh_common_args='-o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no'
+
+# Jump host configuration for remote-jump servers
+[remote-jump:vars]
+ansible_ssh_common_args='-o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -F ssh_config'
+ansible_ssh_private_key_file=~/.ssh/newbie_id_rsa

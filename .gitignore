@@ -1,0 +1,86 @@
+# macOS
+.DS_Store
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+
+# Logs
+logs/
+*.log
+*.log.*
+
+# Environment files
+.env
+.env.*
+!.env.example
+.envrc
+.direnv/
+
+# Secrets & certificates (general)
+*.pem
+*.p12
+*.pfx
+*.crt
+*.cer
+*.der
+*.csr
+*.key
+*.kdb
+*.jks
+*.keystore
+
+# SSH (ignore any .ssh folders and private keys)
+**/.ssh/
+id_rsa
+id_rsa.*
+id_dsa
+id_dsa.*
+id_ecdsa
+id_ecdsa.*
+id_ed25519
+id_ed25519.*
+known_hosts
+authorized_keys
+# Note: do NOT ignore a repo-level ssh_config by name; only .ssh/ dirs are ignored
+
+# Node (if present)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Builds / Coverage / Caches
+dist/
+build/
+coverage/
+.cache/
+.caches/
+tmp/
+temp/
+
+# Python virtual envs (if present)
+.venv/
+venv/
+.python-version
+
+# Firebase
+.firebase/
+firebase-debug.log
+
+# Docker / runtime
+*.pid
+
+# Jenkins runtime state (do not commit local Jenkins data)
+jenkins_home/
+
+# Deployment artifacts
+deploy/
+deploy/current
+deploy-*.tar.gz
+
+# OS miscellany
+Thumbs.db
+

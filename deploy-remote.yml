@@ -1,0 +1,112 @@
+---
+# Deploy application to remote server
+- hosts: remote
+  become: no
+  gather_facts: no
+  vars:
+    release_date: "{{ lookup('env','RELEASE_DATE') }}"
+    deploy_dir: "/usr/share/nginx/html/jenkins/tantt/deploy"
+    keep_releases: "{{ lookup('env','KEEP_RELEASES') | default(5) }}"
+  environment:
+    PYTHONPATH: ""
+
+  tasks:
+    # Create deployment directory structure
+    - name: Create deployment directory
+      raw: mkdir -p "{{ deploy_dir }}" && chmod 755 "{{ deploy_dir }}"
+
+    - name: Create release directory
+      raw: mkdir -p "{{ deploy_dir }}/{{ release_date }}" && chmod 755 "{{ deploy_dir }}/{{ release_date }}"
+
+    # Copy files from local to remote
+    - name: Copy index.html from local to remote
+      raw: |
+        # Copy file from local workspace to remote
+        cat > /tmp/index.html << 'EOF'
+        {{ lookup('file', 'app/index.html') }}
+        EOF
+        chmod 644 /tmp/index.html
+        echo "✅ Copied file to /tmp/index.html"
+      ignore_errors: yes
+
+    - name: Copy index.html từ tmp vào release directory
+      raw: |
+        if [ -f "/tmp/index.html" ]; then
+          cat /tmp/index.html > "{{ deploy_dir }}/{{ release_date }}/index.html"
+          chmod 644 "{{ deploy_dir }}/{{ release_date }}/index.html"
+          echo "✅ Copied to release directory"
+        else
+          echo "❌ /tmp/index.html not found"
+          exit 1
+        fi
+      register: copy_result
+      ignore_errors: yes
+
+    - name: Copy index.html vào thư mục app trên remote
+      raw: |
+        if [ -f "/tmp/index.html" ]; then
+          cat /tmp/index.html > "/usr/share/nginx/html/jenkins/tantt/app/index.html"
+          chmod 644 "/usr/share/nginx/html/jenkins/tantt/app/index.html"
+          echo "✅ Copied to app directory"
+        else
+          echo "❌ /tmp/index.html not found"
+        fi
+      ignore_errors: yes
+
+    - name: Copy index.html vào thư mục current trên remote
+      raw: |
+        if [ -f "/tmp/index.html" ]; then
+          cat /tmp/index.html > "/usr/share/nginx/html/jenkins/tantt/deploy/current/index.html"
+          chmod 644 "/usr/share/nginx/html/jenkins/tantt/deploy/current/index.html"
+          echo "✅ Copied to current directory"
+        else
+          echo "❌ /tmp/index.html not found"
+        fi
+      ignore_errors: yes
+
+    - name: Fallback nếu copy thất bại
+      raw: |
+        echo "❌ Copy failed, using fallback content"
+        cat > "{{ deploy_dir }}/{{ release_date }}/index.html" << 'EOF'
+        <!DOCTYPE html>
+        <html>
+          <head>
+            <title>Demo Deploy</title>
+          </head>
+          <body>
+            <h1>Hello World!</h1>
+          </body>
+        </html>
+        EOF
+        chmod 644 "{{ deploy_dir }}/{{ release_date }}/index.html"
+      when: copy_result is failed
+
+    - name: Cập nhật symlink current
+      raw: |
+        cd "{{ deploy_dir }}"
+        rm -f current
+        ln -sf "{{ release_date }}" current
+
+    - name: Xóa release cũ, chỉ giữ lại {{ keep_releases }}
+      raw: |
+        cd "{{ deploy_dir }}"
+        # Đếm số thư mục release (tên bắt đầu bằng 202*)
+        release_count=$(ls -1d 202* 2>/dev/null | wc -l)
+        if [ "$release_count" -gt "{{ keep_releases }}" ]; then
+          # Xóa các release cũ, chỉ giữ lại {{ keep_releases }} release mới nhất
+          ls -1td 202* 2>/dev/null | tail -n +$(({{ keep_releases }} + 1)) | xargs rm -rf
+          echo "✅ Đã xóa các release cũ"
+        else
+          echo "ℹ️ Không có release nào cần xóa (hiện có: $release_count)"
+        fi
+      ignore_errors: yes
+
+    # Display deployment success information
+    - name: Display deployment success information
+      debug:
+        msg:
+          - "✅ Remote deployment successful!"
+          - "📁 Deploy directory: {{ deploy_dir }}"
+          - "📊 Release: {{ release_date }}"
+          - "🔗 Current symlink: /usr/share/nginx/html/jenkins/tantt/current"
+          - "🌐 Web URL: http://10.1.1.195/jenkins/tantt/deploy/current/"

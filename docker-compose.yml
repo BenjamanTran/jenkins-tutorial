@@ -1,0 +1,44 @@
+
+
+services:
+  jenkins:
+    build:
+      context: .
+      dockerfile: Dockerfile.jenkins
+    container_name: jenkins-workshop
+    ports:
+      - "8080:8080"
+      - "50000:50000"
+    volumes:
+      - ./jenkins_home:/var/jenkins_home
+      - ~/.ssh:/root/.ssh:ro
+      - ~/.ssh:/var/jenkins_home/.ssh:ro
+      - .:/var/jenkins_home/tantt
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /Users/tantt/.config/gcloud/legacy_credentials/t16021999@gmail.com/adc.json:/var/jenkins_home/.gcp/firebase-adc.json:ro
+    environment:
+      - JAVA_OPTS=-Djenkins.install.runSetupWizard=false
+      - FIREBASE_TOKEN=${FIREBASE_TOKEN:-}
+      - GOOGLE_APPLICATION_CREDENTIALS=/var/jenkins_home/.gcp/firebase-adc.json
+    restart: unless-stopped
+    networks:
+      - jenkins-network
+
+  nginx:
+    image: nginx:alpine
+    container_name: nginx-workshop
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf
+      - ./html:/usr/share/nginx/html
+      - .:/usr/share/nginx/html/jenkins/tantt
+    depends_on:
+      - jenkins
+    restart: unless-stopped
+    networks:
+      - jenkins-network
+
+networks:
+  jenkins-network:
+    driver: bridge

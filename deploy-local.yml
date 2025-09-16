@@ -1,0 +1,81 @@
+---
+# Deploy application to local server (idempotent, minimal operations)
+- hosts: local
+  become: no
+  gather_facts: no
+  vars:
+    release_date: "{{ lookup('env','RELEASE_DATE') }}"
+    deploy_dir: "{{ lookup('env','WORKSPACE') }}/deploy"
+    keep_releases: "{{ lookup('env','KEEP_RELEASES') | default(5) }}"
+  environment:
+    PYTHONPATH: ""
+
+  tasks:
+    # Ensure deployment directory structure exists
+    - name: Create deployment directory
+      raw: mkdir -p "{{ deploy_dir }}" && chmod 755 "{{ deploy_dir }}"
+
+    - name: Create release directory
+      raw: mkdir -p "{{ deploy_dir }}/{{ release_date }}" && chmod 755 "{{ deploy_dir }}/{{ release_date }}"
+
+    # Copy application files into the new release
+    - name: Copy index.html from workspace to release
+      copy:
+        src: app/index.html
+        dest: "{{ deploy_dir }}/{{ release_date }}/index.html"
+        mode: '0644'
+      register: copy_result
+      ignore_errors: yes
+
+    # Ensure local nginx content directory exists (volume-mounted in docker-compose)
+    - name: Ensure nginx directory exists
+      raw: |
+        mkdir -p {{ lookup('env','WORKSPACE') }}/html/jenkins/tantt/
+        chmod 755 {{ lookup('env','WORKSPACE') }}/html/jenkins/tantt/
+
+    # Copy the app to nginx directory (single source of truth)
+    - name: Copy index.html to nginx directory
+      copy:
+        src: app/index.html
+        dest: "{{ lookup('env','WORKSPACE') }}/html/jenkins/tantt/index.html"
+        mode: '0644'
+    # Note: No docker cp/reload needed; nginx reads from volume-mounted directory
+
+    - name: Fallback content if copy to release failed
+      raw: |
+        echo "❌ Copy failed, using fallback content"
+        cat > "{{ deploy_dir }}/{{ release_date }}/index.html" << 'EOF'
+        <!DOCTYPE html>
+        <html>
+          <head>
+            <title>Demo Deploy Local</title>
+          </head>
+          <body>
+            <h1>Hello World Local!</h1>
+          </body>
+        </html>
+        EOF
+        chmod 644 "{{ deploy_dir }}/{{ release_date }}/index.html"
+      when: copy_result is failed
+
+    - name: Update current symlink
+      raw: |
+        cd "{{ deploy_dir }}"
+        rm -f current
+        ln -sf "{{ release_date }}" current
+
+    - name: Remove old releases, keep last {{ keep_releases }}
+      shell: |
+        cd {{ deploy_dir }}
+        ls -dt 20* 2>/dev/null | tail -n +$(( {{ keep_releases }} + 1 )) | xargs rm -rf 2>/dev/null || true
+      ignore_errors: yes
+
+    # Display deployment success information
+    - name: Display deployment success information
+      debug:
+        msg:
+          - "✅ Local deployment successful!"
+          - "📁 Deploy directory: {{ deploy_dir }}"
+          - "📊 Release: {{ release_date }}"
+          - "🔗 Current symlink: {{ deploy_dir }}/current"
+          - "🌐 Web URL: http://localhost/jenkins/tantt/deploy/current/"
