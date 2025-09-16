@@ -4,9 +4,9 @@ pipeline {
   parameters {
     string(name: 'REPO_URL', defaultValue: 'https://github.com/BenjamanTran/jenkins-cicd.git', description: 'Application repository URL')
     string(name: 'BRANCH', defaultValue: 'main', description: 'Git branch to build')
-    choice(name: 'DEPLOY_ENV', choices: ['local', 'remote', 'both'], description: 'Where to deploy')
+    choice(name: 'DEPLOY_ENV', choices: ['remote', 'local', 'both'], description: 'Where to deploy')
     string(name: 'KEEP_RELEASES', defaultValue: '5', description: 'How many releases to keep')
-    string(name: 'FIREBASE_PROJECT_ID', defaultValue: '', description: 'Firebase project ID (optional)')
+    string(name: 'FIREBASE_PROJECT_ID', defaultValue: 'tantt-jenkins-2592e', description: 'Firebase project ID (optional)')
   }
 
   environment {
@@ -49,11 +49,7 @@ pipeline {
       steps {
         dir('source') {
           sh '''
-            if [ -f package.json ] && npm run -s | grep -q ' test:ci'; then
-              CI=true npm run test:ci
-            else
-              echo "No test:ci script, skip tests"
-            fi
+              npm run test:ci
           '''
         }
       }
@@ -63,16 +59,12 @@ pipeline {
       steps {
         sh '''
           set -e
-          mkdir -p app
-          if [ -f source/index.html ]; then
-            cp source/index.html app/index.html
-          elif [ -f index.html ]; then
-            cp index.html app/index.html
-          else
-            echo "index.html not found in source/ or workspace root" >&2
-            exit 1
+          SRC="$(pwd)/source"
+          if [ ! -f "$SRC/index.html" ] && [ -f "$SRC/web-performance-project1-initial/index.html" ]; then
+            SRC="$SRC/web-performance-project1-initial"
           fi
-          ./test/test.sh
+          echo "SRC=$SRC"
+          test -f "$SRC/index.html" || { echo "index.html missing in $SRC"; exit 1; }
         '''
       }
     }
@@ -82,17 +74,21 @@ pipeline {
         timeout(time: 10, unit: 'MINUTES') {
           sh '''
             set -e
+            SRC="$(pwd)/source"
+            if [ ! -f "$SRC/index.html" ] && [ -f "$SRC/web-performance-project1-initial/index.html" ]; then
+              SRC="$SRC/web-performance-project1-initial"
+            fi
+            echo "Deploy from $SRC"
+
             export FIREBASE_PROJECT_ID="$FIREBASE_PROJECT_ID"
-            /var/jenkins_home/tantt/scripts/firebase-deploy.sh app
+            NODE_OPTIONS=--max-old-space-size=4096 /var/jenkins_home/tantt/scripts/firebase-deploy.sh "$SRC"
 
             export DEPLOY_ENV="$DEPLOY_ENV"
             export KEEP_RELEASES="$KEEP_RELEASES"
-            INVENTORY_FILE="/var/jenkins_home/tantt/hosts" /var/jenkins_home/tantt/deploy.sh
+            SOURCE_DIR="$SRC" /var/jenkins_home/tantt/deploy.sh
           '''
         }
       }
     }
   }
 }
-
-

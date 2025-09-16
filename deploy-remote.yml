@@ -5,7 +5,7 @@
   gather_facts: no
   vars:
     release_date: "{{ lookup('env','RELEASE_DATE') }}"
-    deploy_dir: "/usr/share/nginx/html/jenkins/tantt/deploy"
+    deploy_dir: "/usr/share/nginx/html/jenkins/tanttws2/deploy"
     keep_releases: "{{ lookup('env','KEEP_RELEASES') | default(5) }}"
   environment:
     PYTHONPATH: ""
@@ -18,18 +18,18 @@
     - name: Create release directory
       raw: mkdir -p "{{ deploy_dir }}/{{ release_date }}" && chmod 755 "{{ deploy_dir }}/{{ release_date }}"
 
-    # Copy files from local to remote
-    - name: Copy index.html from local to remote
+    # Upload index.html from local deploy/{{ release_date }}
+    - name: Copy index.html from local to remote (/tmp)
       raw: |
         # Copy file from local workspace to remote
         cat > /tmp/index.html << 'EOF'
-        {{ lookup('file', 'app/index.html') }}
+        {{ lookup('file', 'deploy/' ~ release_date ~ '/index.html') }}
         EOF
         chmod 644 /tmp/index.html
         echo "✅ Copied file to /tmp/index.html"
       ignore_errors: yes
 
-    - name: Copy index.html từ tmp vào release directory
+    - name: Copy index.html from /tmp into release directory
       raw: |
         if [ -f "/tmp/index.html" ]; then
           cat /tmp/index.html > "{{ deploy_dir }}/{{ release_date }}/index.html"
@@ -42,29 +42,50 @@
       register: copy_result
       ignore_errors: yes
 
-    - name: Copy index.html vào thư mục app trên remote
+    - name: Copy index.html into app directory (for direct access)
       raw: |
         if [ -f "/tmp/index.html" ]; then
-          cat /tmp/index.html > "/usr/share/nginx/html/jenkins/tantt/app/index.html"
-          chmod 644 "/usr/share/nginx/html/jenkins/tantt/app/index.html"
+          mkdir -p "/usr/share/nginx/html/jenkins/tanttws2/app"
+          cat /tmp/index.html > "/usr/share/nginx/html/jenkins/tanttws2/app/index.html"
+          chmod 644 "/usr/share/nginx/html/jenkins/tanttws2/app/index.html"
           echo "✅ Copied to app directory"
         else
           echo "❌ /tmp/index.html not found"
         fi
       ignore_errors: yes
 
-    - name: Copy index.html vào thư mục current trên remote
+    # Upload assets (css, images, js) from local deploy/{{ release_date }} using base64 tar
+    - name: Upload assets (css, images, js) to release and app directories
       raw: |
-        if [ -f "/tmp/index.html" ]; then
-          cat /tmp/index.html > "/usr/share/nginx/html/jenkins/tantt/deploy/current/index.html"
-          chmod 644 "/usr/share/nginx/html/jenkins/tantt/deploy/current/index.html"
-          echo "✅ Copied to current directory"
+        cat > /tmp/assets.tgz.b64 << 'EOF'
+        {{ lookup('pipe', 'tar -C "deploy/' ~ release_date ~ '" -czf - css images js 2>/dev/null | base64') }}
+        EOF
+        if [ -s /tmp/assets.tgz.b64 ]; then
+          base64 -d /tmp/assets.tgz.b64 > /tmp/assets.tgz || true
+          mkdir -p "{{ deploy_dir }}/{{ release_date }}"
+          tar -xzf /tmp/assets.tgz -C "{{ deploy_dir }}/{{ release_date }}" || true
+          mkdir -p "/usr/share/nginx/html/jenkins/tanttws2/app"
+          tar -xzf /tmp/assets.tgz -C "/usr/share/nginx/html/jenkins/tanttws2/app" || true
+          rm -f /tmp/assets.tgz
+          echo "✅ Assets extracted to release and app directories"
         else
-          echo "❌ /tmp/index.html not found"
+          echo "ℹ️ No assets archive generated (css/images/js may be missing locally)"
         fi
+        rm -f /tmp/assets.tgz.b64
       ignore_errors: yes
 
-    - name: Fallback nếu copy thất bại
+    - name: Rewrite asset URLs in index.html to relative (css/js/images)
+      raw: |
+        for f in "{{ deploy_dir }}/{{ release_date }}/index.html" "/usr/share/nginx/html/jenkins/tanttws2/app/index.html"; do
+          if [ -f "$f" ]; then
+            sed -i 's@href="/css/@href="css/@g;s@src="/css/@src="css/@g;s@href="/js/@href="js/@g;s@src="/js/@src="js/@g;s@href="/images/@href="images/@g;s@src="/images/@src="images/@g' "$f" || true
+            sed -i "s@href='/css/@href='css/@g;s@src='/css/@src='css/@g;s@href='/js/@href='js/@g;s@src='/js/@src='js/@g;s@href='/images/@href='images/@g;s@src='/images/@src='images/@g" "$f" || true
+          fi
+        done
+      when: copy_result is succeeded
+      ignore_errors: yes
+
+    - name: Fallback if index copy failed
       raw: |
         echo "❌ Copy failed, using fallback content"
         cat > "{{ deploy_dir }}/{{ release_date }}/index.html" << 'EOF'
@@ -74,32 +95,20 @@
             <title>Demo Deploy</title>
           </head>
           <body>
-            <h1>Hello World!</h1>
+            <h1>Hello World !</h1>
           </body>
         </html>
         EOF
         chmod 644 "{{ deploy_dir }}/{{ release_date }}/index.html"
       when: copy_result is failed
 
-    - name: Cập nhật symlink current
+    - name: Update current symlink
       raw: |
         cd "{{ deploy_dir }}"
-        rm -f current
-        ln -sf "{{ release_date }}" current
-
-    - name: Xóa release cũ, chỉ giữ lại {{ keep_releases }}
-      raw: |
-        cd "{{ deploy_dir }}"
-        # Đếm số thư mục release (tên bắt đầu bằng 202*)
-        release_count=$(ls -1d 202* 2>/dev/null | wc -l)
-        if [ "$release_count" -gt "{{ keep_releases }}" ]; then
-          # Xóa các release cũ, chỉ giữ lại {{ keep_releases }} release mới nhất
-          ls -1td 202* 2>/dev/null | tail -n +$(({{ keep_releases }} + 1)) | xargs rm -rf
-          echo "✅ Đã xóa các release cũ"
-        else
-          echo "ℹ️ Không có release nào cần xóa (hiện có: $release_count)"
+        if [ -e current ] || [ -L current ]; then
+          rm -rf current
         fi
-      ignore_errors: yes
+        ln -s "{{ release_date }}" current
 
     # Display deployment success information
     - name: Display deployment success information
@@ -108,5 +117,5 @@
           - "✅ Remote deployment successful!"
           - "📁 Deploy directory: {{ deploy_dir }}"
           - "📊 Release: {{ release_date }}"
-          - "🔗 Current symlink: /usr/share/nginx/html/jenkins/tantt/current"
-          - "🌐 Web URL: http://10.1.1.195/jenkins/tantt/deploy/current/"
+          - "🔗 Current symlink: {{ deploy_dir }}/current"
+          - "🌐 Web URL: http://10.1.1.195/jenkins/tanttws2/deploy/current/"

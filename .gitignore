@@ -84,3 +84,5 @@ deploy-*.tar.gz
 # OS miscellany
 Thumbs.db
 ssh_config
+
+app/

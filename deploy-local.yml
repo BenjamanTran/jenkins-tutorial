@@ -7,6 +7,7 @@
     release_date: "{{ lookup('env','RELEASE_DATE') }}"
     deploy_dir: "{{ lookup('env','WORKSPACE') }}/deploy"
     keep_releases: "{{ lookup('env','KEEP_RELEASES') | default(5) }}"
+    source_dir: "{{ source_dir | default('') }}"
   environment:
     PYTHONPATH: ""
 
@@ -18,27 +19,60 @@
     - name: Create release directory
       raw: mkdir -p "{{ deploy_dir }}/{{ release_date }}" && chmod 755 "{{ deploy_dir }}/{{ release_date }}"
 
-    # Copy application files into the new release
-    - name: Copy index.html from workspace to release
-      copy:
-        src: app/index.html
-        dest: "{{ deploy_dir }}/{{ release_date }}/index.html"
-        mode: '0644'
+    # Copy site assets from source_dir (repo) into the new release
+    - name: Resolve source_dir default
+      set_fact:
+        source_dir: "{{ lookup('env','WORKSPACE') }}/source"
+      when: source_dir | length == 0
+
+    - name: Copy site assets to release (fast rsync, filtered)
+      synchronize:
+        src: "{{ source_dir }}/"
+        dest: "{{ deploy_dir }}/{{ release_date }}/"
+        recursive: yes
+        delete: no
+        rsync_opts:
+          - "--relative"
+          - "--prune-empty-dirs"
+          - "--include=*/"
+          - "--include=index.html"
+          - "--include=404.html"
+          - "--include=css/***"
+          - "--include=js/***"
+          - "--include=images/***"
+          - "--include=img/***"
+          - "--include=assets/***"
+          - "--include=static/***"
+          - "--exclude=*"
       register: copy_result
       ignore_errors: yes
 
     # Ensure local nginx content directory exists (volume-mounted in docker-compose)
     - name: Ensure nginx directory exists
       raw: |
-        mkdir -p {{ lookup('env','WORKSPACE') }}/html/jenkins/tantt/
-        chmod 755 {{ lookup('env','WORKSPACE') }}/html/jenkins/tantt/
+        mkdir -p {{ lookup('env','WORKSPACE') }}/html/jenkins/tanttws2/
+        chmod 755 {{ lookup('env','WORKSPACE') }}/html/jenkins/tanttws2/
 
-    # Copy the app to nginx directory (single source of truth)
-    - name: Copy index.html to nginx directory
-      copy:
-        src: app/index.html
-        dest: "{{ lookup('env','WORKSPACE') }}/html/jenkins/tantt/index.html"
-        mode: '0644'
+    # Copy site assets to nginx directory (single source of truth)
+    - name: Copy site assets to nginx directory (fast rsync, filtered)
+      synchronize:
+        src: "{{ source_dir }}/"
+        dest: "{{ lookup('env','WORKSPACE') }}/html/jenkins/tanttws2/"
+        recursive: yes
+        delete: no
+        rsync_opts:
+          - "--relative"
+          - "--prune-empty-dirs"
+          - "--include=*/"
+          - "--include=index.html"
+          - "--include=404.html"
+          - "--include=css/***"
+          - "--include=js/***"
+          - "--include=images/***"
+          - "--include=img/***"
+          - "--include=assets/***"
+          - "--include=static/***"
+          - "--exclude=*"
     # Note: No docker cp/reload needed; nginx reads from volume-mounted directory
 
     - name: Fallback content if copy to release failed
@@ -78,4 +112,4 @@
           - "📁 Deploy directory: {{ deploy_dir }}"
           - "📊 Release: {{ release_date }}"
           - "🔗 Current symlink: {{ deploy_dir }}/current"
-          - "🌐 Web URL: http://localhost/jenkins/tantt/deploy/current/"
+          - "🌐 Web URL: http://localhost/jenkins/tanttws2/deploy/current/"

@@ -8,6 +8,12 @@ echo "=== 🚀 Starting deployment process ==="
 # Global error handling
 trap 'echo "❌ Deployment failed! Please check the logs above."; exit 1' ERR
 
+# Resolve script directory (infra root) to use absolute playbook paths
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# Ensure Ansible uses project config
+export ANSIBLE_CONFIG="$SCRIPT_DIR/ansible.cfg"
+
 # Function to verify Ansible availability (no auto-install)
 # Ensures ansible-playbook exists in PATH before proceeding
 check_ansible() {
@@ -34,20 +40,39 @@ check_ansible
 export RELEASE_DATE=$(date +%Y%m%d)
 export WORKSPACE=$(pwd)
 export KEEP_RELEASES=${KEEP_RELEASES:-5}
+export SOURCE_DIR=${SOURCE_DIR:-}
 
 echo "📅 Release Date: $RELEASE_DATE"
 echo "📁 Workspace: $WORKSPACE"
 echo "💾 Keep Releases: $KEEP_RELEASES"
+if [ -z "$SOURCE_DIR" ]; then
+    if [ -d "$WORKSPACE/source" ]; then
+        SOURCE_DIR="$WORKSPACE/source"
+    else
+        SOURCE_DIR="$WORKSPACE"
+    fi
+fi
+echo "📦 Source Dir: $SOURCE_DIR"
 
 # Set deployment environment (local, remote, or both)
-DEPLOY_ENV=${DEPLOY_ENV:-"both"}
+DEPLOY_ENV=${DEPLOY_ENV:-"remote"}
 echo "🌍 Deploy Environment: $DEPLOY_ENV"
 
 # Create local deployment directory only when deploying to local or both
 if [ "$DEPLOY_ENV" = "local" ] || [ "$DEPLOY_ENV" = "both" ]; then
     echo "📂 Creating local deployment directory..."
     mkdir -p "deploy/$RELEASE_DATE"
-    cp "app/index.html" "deploy/$RELEASE_DATE/"
+    # Copy filtered app assets (index.html, 404.html, css, js, images if present)
+    if [ -d "app" ]; then
+        cp -f "app/index.html" "deploy/$RELEASE_DATE/" 2>/dev/null || true
+        [ -f "app/404.html" ] && cp -f "app/404.html" "deploy/$RELEASE_DATE/"
+        for dir in css js images img assets static; do
+            if [ -d "app/$dir" ]; then
+                mkdir -p "deploy/$RELEASE_DATE/$dir"
+                cp -R "app/$dir/." "deploy/$RELEASE_DATE/$dir/"
+            fi
+        done
+    fi
 
     echo "🔗 Creating current symlink for local..."
     # Ensure previous 'current' directory does not block symlink creation
@@ -85,25 +110,26 @@ fi
 cd "$WORKSPACE"
 
 # Execute deployment based on environment
-INVENTORY_FILE="${INVENTORY_FILE:-$WORKSPACE/hosts}"
-EXTRA_VARS="-e app_src_path=$WORKSPACE/app/index.html"
+INVENTORY_FILE="${INVENTORY_FILE:-$SCRIPT_DIR/hosts}"
+# Build JSON for --extra-vars to preserve spaces in paths
+EXTRA_VARS_JSON=$(printf '{"source_dir":"%s","app_src_path":"%s"}' "$SOURCE_DIR" "$WORKSPACE/app/index.html")
 case "$DEPLOY_ENV" in
     "local")
         echo "🏠 Deploying to local server..."
-        ansible-playbook -i "$INVENTORY_FILE" deploy-local.yml $EXTRA_VARS
+        ansible-playbook -i "$INVENTORY_FILE" "$SCRIPT_DIR/deploy-local.yml" --extra-vars "$EXTRA_VARS_JSON"
         ;;
     "remote")
         echo "🌐 Deploying to remote server..."
-        ansible-playbook -i "$INVENTORY_FILE" deploy-remote.yml $EXTRA_VARS
+        ansible-playbook -i "$INVENTORY_FILE" "$SCRIPT_DIR/deploy-remote.yml" --extra-vars "$EXTRA_VARS_JSON"
         ;;
     "both")
         echo "🌍 Deploying to both servers (local + remote)..."
         echo "🏠 Deploying to local server first..."
-        ansible-playbook -i "$INVENTORY_FILE" deploy-local.yml $EXTRA_VARS
+        ansible-playbook -i "$INVENTORY_FILE" "$SCRIPT_DIR/deploy-local.yml" --extra-vars "$EXTRA_VARS_JSON"
         echo "⏳ Waiting 10 seconds before deploying to remote..."
         sleep 10
         echo "🌐 Deploying to remote server..."
-        ansible-playbook -i "$INVENTORY_FILE" deploy-remote.yml $EXTRA_VARS
+        ansible-playbook -i "$INVENTORY_FILE" "$SCRIPT_DIR/deploy-remote.yml" --extra-vars "$EXTRA_VARS_JSON"
         ;;
     *)
         echo "❌ Invalid DEPLOY_ENV: $DEPLOY_ENV"
