@@ -54,24 +54,56 @@
         fi
       ignore_errors: yes
 
-    # Upload assets (css, images, js) from local deploy/{{ release_date }} using base64 tar
-    - name: Upload assets (css, images, js) to release and app directories
+        # Upload assets by folder (split to avoid ARG_MAX)
+    - name: Upload CSS to release and app directories
       raw: |
-        cat > /tmp/assets.tgz.b64 << 'EOF'
-        {{ lookup('pipe', 'tar -C "deploy/' ~ release_date ~ '" -czf - css images js 2>/dev/null | base64') }}
+        cat > /tmp/css.tgz.b64 << 'EOF'
+        {{ lookup('pipe', 'tar -C "deploy/' ~ release_date ~ '" -czf - css 2>/dev/null | base64') }}
         EOF
-        if [ -s /tmp/assets.tgz.b64 ]; then
-          base64 -d /tmp/assets.tgz.b64 > /tmp/assets.tgz || true
-          mkdir -p "{{ deploy_dir }}/{{ release_date }}"
-          tar -xzf /tmp/assets.tgz -C "{{ deploy_dir }}/{{ release_date }}" || true
-          mkdir -p "/usr/share/nginx/html/jenkins/tanttws2/app"
-          tar -xzf /tmp/assets.tgz -C "/usr/share/nginx/html/jenkins/tanttws2/app" || true
-          rm -f /tmp/assets.tgz
-          echo "✅ Assets extracted to release and app directories"
+        if [ -s /tmp/css.tgz.b64 ]; then
+          base64 -d /tmp/css.tgz.b64 > /tmp/css.tgz || true
+          mkdir -p "{{ deploy_dir }}/{{ release_date }}" "/usr/share/nginx/html/jenkins/tanttws2/app"
+          tar -xzf /tmp/css.tgz -C "{{ deploy_dir }}/{{ release_date }}" || true
+          tar -xzf /tmp/css.tgz -C "/usr/share/nginx/html/jenkins/tanttws2/app" || true
+          rm -f /tmp/css.tgz /tmp/css.tgz.b64
+          echo "✅ CSS extracted"
         else
-          echo "ℹ️ No assets archive generated (css/images/js may be missing locally)"
+          echo "ℹ️ No CSS folder locally, skip"
         fi
-        rm -f /tmp/assets.tgz.b64
+      ignore_errors: yes
+
+    - name: Upload JS to release and app directories
+      raw: |
+        cat > /tmp/js.tgz.b64 << 'EOF'
+        {{ lookup('pipe', 'tar -C "deploy/' ~ release_date ~ '" -czf - js 2>/dev/null | base64') }}
+        EOF
+        if [ -s /tmp/js.tgz.b64 ]; then
+          base64 -d /tmp/js.tgz.b64 > /tmp/js.tgz || true
+          mkdir -p "{{ deploy_dir }}/{{ release_date }}" "/usr/share/nginx/html/jenkins/tanttws2/app"
+          tar -xzf /tmp/js.tgz -C "{{ deploy_dir }}/{{ release_date }}" || true
+          tar -xzf /tmp/js.tgz -C "/usr/share/nginx/html/jenkins/tanttws2/app" || true
+          rm -f /tmp/js.tgz /tmp/js.tgz.b64
+          echo "✅ JS extracted"
+        else
+          echo "ℹ️ No JS folder locally, skip"
+        fi
+      ignore_errors: yes
+
+    - name: Upload Images to release and app directories
+      raw: |
+        cat > /tmp/images.tgz.b64 << 'EOF'
+        {{ lookup('pipe', 'tar -C "deploy/' ~ release_date ~ '" -czf - images 2>/dev/null | base64') }}
+        EOF
+        if [ -s /tmp/images.tgz.b64 ]; then
+          base64 -d /tmp/images.tgz.b64 > /tmp/images.tgz || true
+          mkdir -p "{{ deploy_dir }}/{{ release_date }}" "/usr/share/nginx/html/jenkins/tanttws2/app"
+          tar -xzf /tmp/images.tgz -C "{{ deploy_dir }}/{{ release_date }}" || true
+          tar -xzf /tmp/images.tgz -C "/usr/share/nginx/html/jenkins/tanttws2/app" || true
+          rm -f /tmp/images.tgz /tmp/images.tgz.b64
+          echo "✅ Images extracted"
+        else
+          echo "ℹ️ No Images folder locally, skip"
+        fi
       ignore_errors: yes
 
     - name: Rewrite asset URLs in index.html to relative (css/js/images)
