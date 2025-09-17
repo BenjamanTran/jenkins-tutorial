@@ -11,6 +11,38 @@
     PYTHONPATH: ""
 
   tasks:
+    # Pre-checks on controller (no remote Python needed)
+    - name: Assert release_date is provided
+      assert:
+        that:
+          - release_date is defined
+          - release_date | length > 0
+        fail_msg: "Environment variable RELEASE_DATE is missing or empty"
+      delegate_to: localhost
+      run_once: true
+
+    - name: Assert source_dir is provided
+      assert:
+        that:
+          - source_dir is defined
+          - source_dir | length > 0
+        fail_msg: "Variable source_dir not provided (should be passed by deploy.sh/Jenkinsfile)"
+      delegate_to: localhost
+      run_once: true
+
+    - name: Check local index.html exists
+      stat:
+        path: "{{ source_dir }}/index.html"
+      register: local_index_file
+      delegate_to: localhost
+      run_once: true
+
+    - name: Fail if local index.html is missing
+      fail:
+        msg: "Local file {{ source_dir }}/index.html not found"
+      when: not local_index_file.stat.exists | default(false)
+      delegate_to: localhost
+      run_once: true
     # Create deployment directory structure
     - name: Create deployment directory
       raw: mkdir -p "{{ deploy_dir }}" && chmod 755 "{{ deploy_dir }}"
@@ -18,47 +50,29 @@
     - name: Create release directory
       raw: mkdir -p "{{ deploy_dir }}/{{ release_date }}" && chmod 755 "{{ deploy_dir }}/{{ release_date }}"
 
-    # Upload index.html from local deploy/{{ release_date }}
-    - name: Copy index.html from local to remote (/tmp)
+    # Upload index.html from local source_dir without requiring remote Python
+    - name: Copy index.html to release directory
       raw: |
-        # Copy file from local workspace to remote
-        cat > /tmp/index.html << 'EOF'
-        {{ lookup('file', 'deploy/' ~ release_date ~ '/index.html') }}
+        cat > "{{ deploy_dir }}/{{ release_date }}/index.html" << 'EOF'
+        {{ lookup('file', source_dir ~ '/index.html') }}
         EOF
-        chmod 644 /tmp/index.html
-        echo "✅ Copied file to /tmp/index.html"
-      ignore_errors: yes
+        chmod 0644 "{{ deploy_dir }}/{{ release_date }}/index.html"
 
-    - name: Copy index.html from /tmp into release directory
-      raw: |
-        if [ -f "/tmp/index.html" ]; then
-          cat /tmp/index.html > "{{ deploy_dir }}/{{ release_date }}/index.html"
-          chmod 644 "{{ deploy_dir }}/{{ release_date }}/index.html"
-          echo "✅ Copied to release directory"
-        else
-          echo "❌ /tmp/index.html not found"
-          exit 1
-        fi
-      register: copy_result
-      ignore_errors: yes
+    - name: Ensure app directory exists
+      raw: mkdir -p "/usr/share/nginx/html/jenkins/tanttws2/app" && chmod 0755 "/usr/share/nginx/html/jenkins/tanttws2/app"
 
-    - name: Copy index.html into app directory (for direct access)
+    - name: Copy index.html to app directory (for direct access)
       raw: |
-        if [ -f "/tmp/index.html" ]; then
-          mkdir -p "/usr/share/nginx/html/jenkins/tanttws2/app"
-          cat /tmp/index.html > "/usr/share/nginx/html/jenkins/tanttws2/app/index.html"
-          chmod 644 "/usr/share/nginx/html/jenkins/tanttws2/app/index.html"
-          echo "✅ Copied to app directory"
-        else
-          echo "❌ /tmp/index.html not found"
-        fi
-      ignore_errors: yes
+        cat > "/usr/share/nginx/html/jenkins/tanttws2/app/index.html" << 'EOF'
+        {{ lookup('file', source_dir ~ '/index.html') }}
+        EOF
+        chmod 0644 "/usr/share/nginx/html/jenkins/tanttws2/app/index.html"
 
         # Upload assets by folder (split to avoid ARG_MAX)
     - name: Upload CSS to release and app directories
       raw: |
         cat > /tmp/css.tgz.b64 << 'EOF'
-        {{ lookup('pipe', 'tar -C "deploy/' ~ release_date ~ '" -czf - css 2>/dev/null | base64') }}
+        {{ lookup('pipe', 'tar -C "' ~ source_dir ~ '" -czf - css 2>/dev/null | base64') }}
         EOF
         if [ -s /tmp/css.tgz.b64 ]; then
           base64 -d /tmp/css.tgz.b64 > /tmp/css.tgz || true
@@ -75,7 +89,7 @@
     - name: Upload JS to release and app directories
       raw: |
         cat > /tmp/js.tgz.b64 << 'EOF'
-        {{ lookup('pipe', 'tar -C "deploy/' ~ release_date ~ '" -czf - js 2>/dev/null | base64') }}
+        {{ lookup('pipe', 'tar -C "' ~ source_dir ~ '" -czf - js 2>/dev/null | base64') }}
         EOF
         if [ -s /tmp/js.tgz.b64 ]; then
           base64 -d /tmp/js.tgz.b64 > /tmp/js.tgz || true
@@ -89,50 +103,105 @@
         fi
       ignore_errors: yes
 
-    - name: Upload Images to release and app directories
+    - name: Upload images and img directories via SSH stream (release and app)
+      shell: |
+        set -e
+        for d in images img; do
+          if [ -d "{{ source_dir }}/$d" ]; then
+            echo "Streaming $d..."
+            tar -C "{{ source_dir }}" -czf - "$d" \
+            | ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+                 {{ ('-i ' ~ hostvars[inventory_hostname].ansible_ssh_private_key_file) if (hostvars[inventory_hostname].ansible_ssh_private_key_file is defined) else '' }} \
+                 -p "{{ hostvars[inventory_hostname].ansible_port | default(22) }}" \
+                 "{{ hostvars[inventory_hostname].ansible_user }}@{{ inventory_hostname | regex_replace(':.*$', '') }}" \
+                 "set -e; TMP=\$(mktemp /tmp/assets.XXXXXX.tgz); cat >\$TMP; mkdir -p '{{ deploy_dir }}/{{ release_date }}' '/usr/share/nginx/html/jenkins/tanttws2/app'; tar -xzf \$TMP -C '{{ deploy_dir }}/{{ release_date }}'; tar -xzf \$TMP -C '/usr/share/nginx/html/jenkins/tanttws2/app'; rm -f \$TMP"
+          else
+            echo "Skip $d"
+          fi
+        done
+      args:
+        executable: /bin/bash
+      delegate_to: localhost
+      ignore_errors: yes
+
+    - name: Upload assets directory to release and app
       raw: |
-        cat > /tmp/images.tgz.b64 << 'EOF'
-        {{ lookup('pipe', 'tar -C "deploy/' ~ release_date ~ '" -czf - images 2>/dev/null | base64') }}
+        cat > /tmp/assets.tgz.b64 << 'EOF'
+        {{ lookup('pipe', 'tar -C "' ~ source_dir ~ '" -czf - assets 2>/dev/null | base64') }}
         EOF
-        if [ -s /tmp/images.tgz.b64 ]; then
-          base64 -d /tmp/images.tgz.b64 > /tmp/images.tgz || true
+        if [ -s /tmp/assets.tgz.b64 ]; then
+          base64 -d /tmp/assets.tgz.b64 > /tmp/assets.tgz || true
           mkdir -p "{{ deploy_dir }}/{{ release_date }}" "/usr/share/nginx/html/jenkins/tanttws2/app"
-          tar -xzf /tmp/images.tgz -C "{{ deploy_dir }}/{{ release_date }}" || true
-          tar -xzf /tmp/images.tgz -C "/usr/share/nginx/html/jenkins/tanttws2/app" || true
-          rm -f /tmp/images.tgz /tmp/images.tgz.b64
-          echo "✅ Images extracted"
+          tar -xzf /tmp/assets.tgz -C "{{ deploy_dir }}/{{ release_date }}" || true
+          tar -xzf /tmp/assets.tgz -C "/usr/share/nginx/html/jenkins/tanttws2/app" || true
+          rm -f /tmp/assets.tgz /tmp/assets.tgz.b64
+          echo "✅ assets extracted"
         else
-          echo "ℹ️ No Images folder locally, skip"
+          echo "ℹ️ No assets folder locally, skip"
         fi
       ignore_errors: yes
 
-    - name: Rewrite asset URLs in index.html to relative (css/js/images)
+    - name: Upload static directory to release and app
+      raw: |
+        cat > /tmp/static.tgz.b64 << 'EOF'
+        {{ lookup('pipe', 'tar -C "' ~ source_dir ~ '" -czf - static 2>/dev/null | base64') }}
+        EOF
+        if [ -s /tmp/static.tgz.b64 ]; then
+          base64 -d /tmp/static.tgz.b64 > /tmp/static.tgz || true
+          mkdir -p "{{ deploy_dir }}/{{ release_date }}" "/usr/share/nginx/html/jenkins/tanttws2/app"
+          tar -xzf /tmp/static.tgz -C "{{ deploy_dir }}/{{ release_date }}" || true
+          tar -xzf /tmp/static.tgz -C "/usr/share/nginx/html/jenkins/tanttws2/app" || true
+          rm -f /tmp/static.tgz /tmp/static.tgz.b64
+          echo "✅ static extracted"
+        else
+          echo "ℹ️ No static folder locally, skip"
+        fi
+      ignore_errors: yes
+
+    - name: Ensure asset directories exist (images/img/assets/static) on release and app
+      raw: |
+        for d in images img assets static; do
+          mkdir -p "{{ deploy_dir }}/{{ release_date }}/$d" "/usr/share/nginx/html/jenkins/tanttws2/app/$d"
+        done
+      changed_when: false
+
+    - name: Create symlink fallbacks between images/img/assets/images (release and app)
+      raw: |
+        for base in "{{ deploy_dir }}/{{ release_date }}" "/usr/share/nginx/html/jenkins/tanttws2/app"; do
+          # Ensure /images resolves even if only assets/images or img exists
+          if [ ! -d "$base/images" ] || [ -z "$(ls -A "$base/images" 2>/dev/null)" ]; then
+            if [ -d "$base/assets/images" ]; then
+              rm -rf "$base/images" && ln -s "assets/images" "$base/images" && echo "🔗 $base/images -> assets/images" || true
+            elif [ -d "$base/img" ]; then
+              rm -rf "$base/images" && ln -s "img" "$base/images" && echo "🔗 $base/images -> img" || true
+            fi
+          fi
+          # Ensure /img resolves if only images exists
+          if [ ! -d "$base/img" ] || [ -z "$(ls -A "$base/img" 2>/dev/null)" ]; then
+            if [ -d "$base/images" ]; then
+              rm -rf "$base/img" && ln -s "images" "$base/img" && echo "🔗 $base/img -> images" || true
+            fi
+          fi
+        done
+      changed_when: false
+
+    - name: Rewrite asset URLs in index.html to relative (css/js/images/img/assets/static)
       raw: |
         for f in "{{ deploy_dir }}/{{ release_date }}/index.html" "/usr/share/nginx/html/jenkins/tanttws2/app/index.html"; do
           if [ -f "$f" ]; then
-            sed -i 's@href="/css/@href="css/@g;s@src="/css/@src="css/@g;s@href="/js/@href="js/@g;s@src="/js/@src="js/@g;s@href="/images/@href="images/@g;s@src="/images/@src="images/@g' "$f" || true
-            sed -i "s@href='/css/@href='css/@g;s@src='/css/@src='css/@g;s@href='/js/@href='js/@g;s@src='/js/@src='js/@g;s@href='/images/@href='images/@g;s@src='/images/@src='images/@g" "$f" || true
+            sed -i 's@href="/css/@href="css/@g;s@src="/css/@src="css/@g;s@href="/js/@href="js/@g;s@src="/js/@src="js/@g;s@href="/images/@href="images/@g;s@src="/images/@src="images/@g;s@href="/img/@href="img/@g;s@src="/img/@src="img/@g;s@href="/assets/@href="assets/@g;s@src="/assets/@src="assets/@g;s@href="/static/@href="static/@g;s@src="/static/@src="static/@g' "$f" || true
+            sed -i "s@href='/css/@href='css/@g;s@src='/css/@src='css/@g;s@href='/js/@href='js/@g;s@src='/js/@src='js/@g;s@href='/images/@href='images/@g;s@src='/images/@src='images/@g;s@href='/img/@href='img/@g;s@src='/img/@src='img/@g;s@href='/assets/@href='assets/@g;s@src='/assets/@src='assets/@g;s@href='/static/@href='static/@g;s@src='/static/@src='static/@g" "$f" || true
           fi
         done
-      when: copy_result is succeeded
-      ignore_errors: yes
+      changed_when: false
 
-    - name: Fallback if index copy failed
+    - name: List deployed directories (top 2 levels) for verification
       raw: |
-        echo "❌ Copy failed, using fallback content"
-        cat > "{{ deploy_dir }}/{{ release_date }}/index.html" << 'EOF'
-        <!DOCTYPE html>
-        <html>
-          <head>
-            <title>Demo Deploy</title>
-          </head>
-          <body>
-            <h1>Hello World !</h1>
-          </body>
-        </html>
-        EOF
-        chmod 644 "{{ deploy_dir }}/{{ release_date }}/index.html"
-      when: copy_result is failed
+        echo "Release tree:" && find "{{ deploy_dir }}/{{ release_date }}" -maxdepth 2 -type d | sort
+        echo "App tree:" && find "/usr/share/nginx/html/jenkins/tanttws2/app" -maxdepth 2 -type d | sort
+      changed_when: false
+
+    # Removed fallback for index.html copy: fail fast on errors
 
     - name: Update current symlink
       raw: |
